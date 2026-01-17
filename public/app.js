@@ -1,128 +1,102 @@
-// --- DOM ELEMENTS ---
-// Make sure the IDs inside getElementById match your index.html exactly
-const chatContainer = document.getElementById('chat-container') || document.body; 
-const messageInput = document.getElementById('user-input') || document.querySelector('input[type="text"]');
-const sendButton = document.getElementById('send-btn') || document.querySelector('button');
-const recordButton = document.getElementById('mic-btn'); // The microphone button
+document.addEventListener('DOMContentLoaded', () => {
+    console.log("✅ App Initialized");
 
-// --- VARIABLES ---
-let isRecognizing = false;
+    // --- ELEMENTS ---
+    const chatContainer = document.getElementById('chat-container');
+    const userInput = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+    const micBtn = document.getElementById('mic-btn');
 
-// --- EVENT LISTENERS ---
+    // --- FUNCTIONS ---
 
-// 1. Send on Button Click
-if (sendButton) {
-    sendButton.addEventListener('click', sendMessage);
-}
-
-// 2. Send on Enter Key
-if (messageInput) {
-    messageInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') sendMessage();
-    });
-}
-
-// 3. Microphone Logic (Speech to Text)
-if (recordButton && 'webkitSpeechRecognition' in window) {
-    const recognition = new webkitSpeechRecognition();
-    recognition.continuous = false;
-    recognition.lang = 'en-IN'; // Indian English
-
-    recordButton.addEventListener('click', () => {
-        if (!isRecognizing) {
-            recognition.start();
-            recordButton.classList.add('recording'); // Add CSS class for visual effect
-        } else {
-            recognition.stop();
-            recordButton.classList.remove('recording');
-        }
-    });
-
-    recognition.onstart = () => {
-        isRecognizing = true;
-        console.log("Listening...");
-    };
-
-    recognition.onend = () => {
-        isRecognizing = false;
-        recordButton.classList.remove('recording');
-    };
-
-    recognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        if (messageInput) messageInput.value = transcript;
-        sendMessage(); // Auto-send after speaking
-    };
-}
-
-// --- CORE FUNCTIONS ---
-
-async function sendMessage() {
-    const text = messageInput.value.trim();
-    if (!text) return;
-
-    // 1. Show User Message
-    addMessageToUI("User", text);
-    messageInput.value = ''; // Clear input
-
-    // 2. Show Loading Indicator
-    const loadingId = addMessageToUI("System", "Thinking...");
-
-    try {
-        // 3. Send Request to Server
-        const response = await fetch('/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text })
-        });
-
-        const data = await response.json();
-        
-        // Remove "Thinking..." message
-        removeMessage(loadingId);
-
-        if (response.ok) {
-            // ✅ SUCCESS: Show AI Response
-            addMessageToUI("Krishi Mitra", data.response);
-        } else {
-            // ❌ SERVER ERROR: Show the real error message from server
-            console.error("Server Error:", data.error);
-            addMessageToUI("System", "⚠️ " + (data.error || "Something went wrong."));
-        }
-
-    } catch (error) {
-        // ❌ NETWORK ERROR (Internet issue or Server down)
-        removeMessage(loadingId);
-        console.error("Fetch Error:", error);
-        addMessageToUI("System", "❌ Network Error: Could not connect to server. Please check your internet.");
+    function appendMessage(sender, text) {
+        if (!chatContainer) return;
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `message ${sender.toLowerCase()}`;
+        msgDiv.style.margin = "10px";
+        msgDiv.style.padding = "10px";
+        msgDiv.style.borderRadius = "8px";
+        msgDiv.style.backgroundColor = sender === 'User' ? '#d1e7dd' : '#f8d7da';
+        msgDiv.innerHTML = `<strong>${sender}:</strong> ${text}`;
+        chatContainer.appendChild(msgDiv);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
     }
-}
 
-// Helper: Add Message to Chat Window
-function addMessageToUI(sender, text) {
-    if (!chatContainer) return;
+    async function sendMessage() {
+        const text = userInput.value.trim();
+        if (!text) return;
 
-    const msgDiv = document.createElement('div');
-    const msgId = 'msg-' + Date.now();
-    msgDiv.id = msgId;
-    msgDiv.classList.add('message', sender.toLowerCase().replace(" ", "-"));
-    
-    // Simple styling structure
-    msgDiv.innerHTML = `
-        <strong>${sender}:</strong> 
-        <span>${text}</span>
-    `;
+        appendMessage("User", text);
+        userInput.value = '';
+        
+        // Show loading state
+        const loadingDiv = document.createElement('div');
+        loadingDiv.innerText = "Krishi Mitra is thinking...";
+        chatContainer.appendChild(loadingDiv);
 
-    chatContainer.appendChild(msgDiv);
-    
-    // Auto-scroll to bottom
-    chatContainer.scrollTop = chatContainer.scrollHeight;
+        try {
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: text })
+            });
 
-    return msgId;
-}
+            const data = await response.json();
+            loadingDiv.remove(); // Remove loading text
+            appendMessage("Krishi Mitra", data.response);
 
-// Helper: Remove Message (for Loading state)
-function removeMessage(id) {
-    const el = document.getElementById(id);
-    if (el) el.remove();
-}
+        } catch (error) {
+            loadingDiv.remove();
+            console.error(error);
+            appendMessage("System", "⚠️ Network Error. Please check connection.");
+        }
+    }
+
+    // --- EVENT LISTENERS ---
+
+    if (sendBtn) {
+        sendBtn.addEventListener('click', sendMessage);
+    }
+
+    if (userInput) {
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+    }
+
+    // --- MIC LOGIC ---
+    if (micBtn) {
+        if ('webkitSpeechRecognition' in window) {
+            const recognition = new webkitSpeechRecognition();
+            recognition.lang = 'en-IN';
+            recognition.continuous = false;
+
+            micBtn.addEventListener('click', () => {
+                console.log("🎤 Mic Activated");
+                micBtn.style.backgroundColor = "red"; // Visual Cue
+                recognition.start();
+            });
+
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                userInput.value = transcript;
+                micBtn.style.backgroundColor = ""; // Reset Color
+                sendMessage(); // Auto Send
+            };
+
+            recognition.onend = () => {
+                micBtn.style.backgroundColor = "";
+            };
+
+            recognition.onerror = (event) => {
+                console.error("Mic Error:", event.error);
+                micBtn.style.backgroundColor = "";
+            };
+        } else {
+            console.warn("Speech recognition not supported in this browser.");
+            micBtn.style.display = 'none'; // Hide if not supported
+        }
+    } else {
+        console.error("❌ Mic Button (id='mic-btn') not found in HTML!");
+    }
+});
