@@ -4,24 +4,26 @@ const cors = require('cors');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
-// Increase data limit for audio/images
+const port = process.env.PORT || 3000;
+
+// Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static('public'));
 app.use(cors());
 
-// --- 1. VERIFY KEY ---
-if (!process.env.GEMINI_API_KEY) {
-    console.error("❌ ERROR: GEMINI_API_KEY is missing in .env file.");
-    process.exit(1);
+// --- CONFIGURATION ---
+const API_KEY = process.env.GEMINI_API_KEY;
+
+// Check for API Key on startup
+if (!API_KEY) {
+    console.error("❌ FATAL ERROR: GEMINI_API_KEY is missing in your .env or Hosting Settings!");
 }
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const genAI = new GoogleGenerativeAI(API_KEY);
 
-// --- 2. SETUP GEMINI MODEL ---
-// Switched to 'gemini-2.0-flash' (Valid per your list, better stability)
+// ✅ UPDATED: Using the model you confirmed is valid
 const model = genAI.getGenerativeModel({ 
-    model: "gemini-2.0-flash",
-    // TURN OFF SAFETY FILTERS (Critical for "Crop Doctor" features)
+    model: "gemini-2.0-flash", 
     safetySettings: [
         { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
         { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -30,109 +32,57 @@ const model = genAI.getGenerativeModel({
     ]
 });
 
-// --- KNOWLEDGE BASE ---
+// --- KNOWLEDGE BASE (Backup to save API Limit) ---
 const MARKET_RATES = {
-    "onion": 2400, "pyaz": 2400, "kanda": 2400,
-    "tomato": 1800, "tamatar": 1800,
-    "potato": 1200, "aloo": 1200,
-    "wheat": 2200, "gehu": 2200,
-    "rice": 3000, "chawal": 3000
+    "onion": "2400 INR/Quintal",
+    "potato": "1800 INR/Quintal",
+    "tomato": "3200 INR/Quintal",
+    "wheat": "2100 INR/Quintal",
+    "rice": "2800 INR/Quintal",
+    "pyaz": "2400 INR/Quintal",
+    "aloo": "1800 INR/Quintal"
 };
 
-// ==================================================================
-// ROUTE 1: THE MAIN VOICE BRAIN
-// ==================================================================
-app.post('/api/process-voice', async (req, res) => {
+// --- API ROUTE ---
+app.post('/api/chat', async (req, res) => {
     try {
-        const { text, userType, lang } = req.body;
-        console.log(`🎤 Voice Input (${lang}): "${text}"`);
+        if (!API_KEY) {
+            return res.status(500).json({ error: "API Key missing on server." });
+        }
 
-        const prompt = `
-            Act as "Krishi Sahayak" (Indian Farmer AI).
-            User Input: "${text}"
-            Target Language: "${lang}" (You MUST reply in this language).
-            
-            DATA:
-            - Market Prices (Rs/Quintal): ${JSON.stringify(MARKET_RATES)}
-            
-            LOGIC:
-            1. SELL/PRICE: Identify crop. Convert Price to KG (Price/100).
-            2. TRANSPORT: If asking about truck/distance, estimate cost (e.g., Distance * 15 Rs).
-            3. DOCTOR: If input mentions disease/yellow leaves/insects, diagnose it and suggest remedy.
-            4. WEATHER: If asking about rain/forecast, give a generic safe prediction.
-            5. GENERAL: Answer helpful questions for farmers.
+        const { message } = req.body;
+        console.log("📩 Received Query:", message);
 
-            OUTPUT:
-            Return ONLY a JSON string. NO Markdown.
-            {
-                "voiceResponse": "Your reply here in ${lang}",
-                "intent": "SELL"
+        // 1. Check Local Prices first (Instant & Free)
+        const lowerMsg = message.toLowerCase();
+        for (const [crop, price] of Object.entries(MARKET_RATES)) {
+            if (lowerMsg.includes(crop)) {
+                return res.json({ response: `The current mandi price for ${crop} is ${price}.` });
             }
-        `;
+        }
+
+        // 2. Ask Gemini AI
+        const prompt = `You are "Krishi Mitra", an Indian agricultural expert. 
+        Answer this farmer's question simply in English: "${message}"
+        Keep it short (under 50 words).`;
 
         const result = await model.generateContent(prompt);
         const response = await result.response;
-        const rawText = response.text();
-        
-        // Clean JSON
-        let cleanText = rawText.replace(/```json/g, '').replace(/```/g, '');
-        const firstBrace = cleanText.indexOf('{');
-        const lastBrace = cleanText.lastIndexOf('}');
-        
-        if (firstBrace !== -1 && lastBrace !== -1) {
-            cleanText = cleanText.substring(firstBrace, lastBrace + 1);
-            res.json(JSON.parse(cleanText));
-        } else {
-            console.error("AI returned invalid JSON");
-            res.json({
-                voiceResponse: "Maaf karein, network issue hai. Phir se boliye.",
-                intent: "ERROR"
-            });
-        }
+        const text = response.text();
+
+        res.json({ response: text });
 
     } catch (error) {
-        console.error("❌ MAIN PROCESS ERROR:", error);
+        console.error("❌ API Error:", error.message);
         
-        // Check for Quota Error specifically
-        if (error.message.includes('429') || error.message.includes('Quota')) {
-            res.status(503).json({ 
-                voiceResponse: "Server busy (Limit Reached). Please wait 30 seconds." 
-            });
-        } else {
-            res.status(500).json({ 
-                voiceResponse: "System Error: " + error.message 
-            });
-        }
+        // Return a clean error message to the frontend
+        res.status(500).json({ 
+            error: "Server Busy or Limit Reached. Try again in 1 minute." 
+        });
     }
 });
 
-// ==================================================================
-// ROUTE 2: UNIVERSAL TRANSLATOR
-// ==================================================================
-app.post('/api/translate', async (req, res) => {
-    try {
-        const { text, targetLang } = req.body;
-        
-        const prompt = `
-            Translate the following text into ${targetLang} (using native script).
-            Return ONLY the translated string. No quotes, no explanations.
-            Text: "${text}"
-        `;
-        
-        const result = await model.generateContent(prompt);
-        const translatedText = result.response.text().trim();
-        
-        res.json({ translatedText });
-        
-    } catch (error) {
-        console.error("❌ TRANSLATION ERROR:", error);
-        res.status(500).json({ error: "Translation Failed" });
-    }
+// Start Server
+app.listen(port, () => {
+    console.log(`✅ Server running on port ${port}`);
 });
-
-// ==================================================================
-// START SERVER
-// ==================================================================
-// USE THE PORT RENDER GIVES US, OR 3000 IF LOCAL
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Krishi Server running on Port ${PORT}`));
